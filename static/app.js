@@ -3580,7 +3580,7 @@ function renderAdminTables(active, recycled) {
     if (active.length === 0) {
         activeTbody.innerHTML = '<tr><td colspan="4" class="table-empty-cell">Tidak ada karyawan aktif</td></tr>';
     } else {
-        active.forEach(emp => {
+        active.forEach(emp => { 
             const row = document.createElement('tr');
             row.innerHTML = `
                 <td><code>${escapeHtml(emp.id)}</code></td>
