@@ -17,6 +17,8 @@ const state = {
     animationFrameId: null,
     isScanning: false,
     audioCtx: null,
+    adminAttendanceSummary: null,
+    adminEmployeeAttendanceStats: [],
 
     // AI Model State
     useRealFaceApi: false,
@@ -529,7 +531,26 @@ const elements = {
     statCheckIn: document.getElementById('stat-checkin'),
     statCheckOut: document.getElementById('stat-checkout'),
     statUsers: document.getElementById('stat-users'),
+    statRate: document.getElementById('stat-rate'),
+    statAbsent: document.getElementById('stat-absent'),
+    statLate: document.getElementById('stat-late'),
     recentActivityList: document.getElementById('recent-activity-list'),
+
+    adminTotalEmployees: document.getElementById('admin-total-employees'),
+    adminTodayPresent: document.getElementById('admin-today-present'),
+    adminTodayAbsent: document.getElementById('admin-today-absent'),
+    adminAttendanceRate: document.getElementById('admin-attendance-rate'),
+    adminTotalLogs: document.getElementById('admin-total-logs'),
+    adminTotalCheckins: document.getElementById('admin-total-checkins'),
+    adminTotalCheckouts: document.getElementById('admin-total-checkouts'),
+    adminTotalLate: document.getElementById('admin-total-late'),
+    adminEmployeeStatisticsTbody: document.getElementById('admin-employee-statistics-tbody'),
+
+    overallTotalLogs: document.getElementById('overall-total-logs'),
+    overallTotalCheckins: document.getElementById('overall-total-checkins'),
+    overallTotalCheckouts: document.getElementById('overall-total-checkouts'),
+    overallTotalLate: document.getElementById('overall-total-late'),
+    employeeStatisticsTbody: document.getElementById('employee-statistics-tbody'),
 
     // Registration Tab
     registerForm: document.getElementById('register-form'),
@@ -1194,31 +1215,50 @@ async function loadData() {
     try {
         const statsRes = await apiFetch('/api/stats');
         const stats = await statsRes.json();
-        if (!statsRes.ok) throw new Error(stats.message || 'Gagal memuat statistik');
+
+        if (!statsRes.ok) {
+            throw new Error(stats.message || 'Gagal memuat statistik');
+        }
 
         state.totalEmployees = Number(stats.total_employees || 0);
-        elements.statUsers.textContent = state.totalEmployees;
-        elements.statCheckIn.textContent = stats.today_checkins || 0;
-        elements.statCheckOut.textContent = stats.today_checkouts || 0;
+
+        if (elements.statUsers) {
+            elements.statUsers.textContent = state.totalEmployees;
+        }
+
+        if (elements.statCheckIn) {
+            elements.statCheckIn.textContent = stats.today_checkins || 0;
+        }
+
+        if (elements.statCheckOut) {
+            elements.statCheckOut.textContent = stats.today_checkouts || 0;
+        }
 
         if (state.isAdmin) {
             const [empRes, logsRes] = await Promise.all([
                 apiFetch('/api/employees'),
                 apiFetch('/api/logs')
             ]);
+
             if (empRes.status === 401 || logsRes.status === 401) {
                 state.isAdmin = false;
                 state.employees = [];
                 state.logs = [];
                 updateSessionUI();
             } else {
-                if (empRes.ok) state.employees = await empRes.json();
-                if (logsRes.ok) state.logs = await logsRes.json();
+                if (empRes.ok) {
+                    state.employees = await empRes.json();
+                }
+
+                if (logsRes.ok) {
+                    state.logs = await logsRes.json();
+                }
             }
         } else {
             state.employees = [];
             state.logs = [];
         }
+
     } catch (error) {
         console.error('Gagal mengambil data dari Flask API:', error);
     }
@@ -3099,6 +3139,132 @@ function renderRecentActivities() {
     });
 }
 
+function renderAttendanceStatistics() {
+    if (elements.overallTotalLogs) {
+        elements.overallTotalLogs.textContent = state.attendanceSummary?.total_logs || 0;
+    }
+
+    if (elements.overallTotalCheckins) {
+        elements.overallTotalCheckins.textContent = state.attendanceSummary?.total_checkins || 0;
+    }
+
+    if (elements.overallTotalCheckouts) {
+        elements.overallTotalCheckouts.textContent = state.attendanceSummary?.total_checkouts || 0;
+    }
+
+    if (elements.overallTotalLate) {
+        elements.overallTotalLate.textContent = state.attendanceSummary?.total_late || 0;
+    }
+
+    const tbody = elements.employeeStatisticsTbody;
+
+    if (!tbody) {
+        return;
+    }
+
+    tbody.innerHTML = '';
+
+    if (!state.isAdmin) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="table-empty-cell">
+                    <div class="table-empty-state">
+                        <span class="material-icons-round">lock</span>
+                        <strong>Login admin diperlukan</strong>
+                        <small>Statistik per pegawai hanya tampil setelah admin login.</small>
+                    </div>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    const rows = Array.isArray(state.employeeAttendanceStats)
+        ? state.employeeAttendanceStats
+        : [];
+
+    if (rows.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="table-empty-cell">
+                    <div class="table-empty-state">
+                        <span class="material-icons-round">bar_chart</span>
+                        <strong>Belum ada data statistik</strong>
+                        <small>Data akan muncul setelah karyawan melakukan presensi.</small>
+                    </div>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+
+    rows.forEach(employee => {
+        const tr = document.createElement('tr');
+
+        const todayStatus = employee.today_status || 'Belum hadir';
+
+        let statusClass = 'neutral';
+
+        if (todayStatus === 'Hadir') {
+            statusClass = 'check-in';
+        } else if (todayStatus === 'Terlambat') {
+            statusClass = 'late';
+        }
+
+        const lastAttendance = employee.last_attendance
+            ? formatDateTimeLabel(employee.last_attendance)
+            : '-';
+
+        tr.innerHTML = `
+            <td>
+                <div class="employee-stat-profile">
+                    <img 
+                        src="${safeImageUrl(employee.photo)}" 
+                        class="activity-avatar" 
+                        alt="Foto ${escapeHtml(employee.name)}"
+                    >
+                    <div class="user-meta">
+                        <h4>${escapeHtml(employee.name)}</h4>
+                        <p>${escapeHtml(employee.role)} • ID: ${escapeHtml(employee.id)}</p>
+                    </div>
+                </div>
+            </td>
+            <td><strong>${Number(employee.present_days || 0)}</strong> hari</td>
+            <td>${Number(employee.total_checkins || 0)}</td>
+            <td>${Number(employee.total_checkouts || 0)}</td>
+            <td>${Number(employee.total_late || 0)}</td>
+            <td>
+                <span class="badge ${statusClass}">
+                    ${escapeHtml(todayStatus)}
+                </span>
+            </td>
+            <td>${escapeHtml(lastAttendance)}</td>
+        `;
+
+        tbody.appendChild(tr);
+    });
+}
+
+function formatDateTimeLabel(value) {
+    if (!value) {
+        return '-';
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return value;
+    }
+
+    return date.toLocaleString('id-ID', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+}
+
 // Logs Table Panel
 function renderLogs(logsToRender = state.logs) {
     elements.logsTbody.innerHTML = '';
@@ -3221,32 +3387,164 @@ function closeModal() {
 
 async function loadAdminData() {
     try {
-        if (!(await ensureAdminSession())) return;
+        if (!(await ensureAdminSession())) {
+            return;
+        }
 
-        const [setRes, empRes, recycleRes] = await Promise.all([
+        const [setRes, empRes, recycleRes, attendanceStatsRes] = await Promise.all([
             apiFetch('/api/settings'),
             apiFetch('/api/employees'),
-            apiFetch('/api/employees/recycle_bin')
+            apiFetch('/api/employees/recycle_bin'),
+            apiFetch('/api/attendance-statistics')
         ]);
 
-        if (!setRes.ok || !empRes.ok || !recycleRes.ok) {
+        if (!setRes.ok || !empRes.ok || !recycleRes.ok || !attendanceStatsRes.ok) {
             throw new Error('Sesi admin berakhir atau data gagal dimuat.');
         }
 
         const settings = await setRes.json();
         state.employees = await empRes.json();
         const recycled = await recycleRes.json();
+        const attendanceStats = await attendanceStatsRes.json();
+
+        state.adminAttendanceSummary = attendanceStats.summary || null;
+        state.adminEmployeeAttendanceStats = attendanceStats.employees || [];
 
         document.getElementById('setting-checkin-start').value = settings.checkin_start || '07:00';
         document.getElementById('setting-checkin-end').value = settings.checkin_end || '09:00';
         document.getElementById('setting-checkout-start').value = settings.checkout_start || '17:00';
         document.getElementById('setting-checkout-end').value = settings.checkout_end || '19:00';
 
+        renderAdminAttendanceStatistics();
         renderAdminTables(state.employees, recycled);
+
     } catch (error) {
         console.error('Failed to load admin data:', error);
         showToast('Gagal memuat data admin', error.message || 'Silakan coba kembali.', 'error');
     }
+}
+
+function renderAdminAttendanceStatistics() {
+    const summary = state.adminAttendanceSummary || {};
+
+    if (elements.adminTotalEmployees) {
+        elements.adminTotalEmployees.textContent = summary.total_employees || 0;
+    }
+
+    if (elements.adminTodayPresent) {
+        elements.adminTodayPresent.textContent = summary.today_present || 0;
+    }
+
+    if (elements.adminTodayAbsent) {
+        elements.adminTodayAbsent.textContent = summary.today_absent || 0;
+    }
+
+    if (elements.adminAttendanceRate) {
+        elements.adminAttendanceRate.textContent = summary.attendance_rate || 0;
+    }
+
+    if (elements.adminTotalLogs) {
+        elements.adminTotalLogs.textContent = summary.total_logs || 0;
+    }
+
+    if (elements.adminTotalCheckins) {
+        elements.adminTotalCheckins.textContent = summary.total_checkins || 0;
+    }
+
+    if (elements.adminTotalCheckouts) {
+        elements.adminTotalCheckouts.textContent = summary.total_checkouts || 0;
+    }
+
+    if (elements.adminTotalLate) {
+        elements.adminTotalLate.textContent = summary.total_late || 0;
+    }
+
+    const tbody = elements.adminEmployeeStatisticsTbody;
+
+    if (!tbody) {
+        return;
+    }
+
+    tbody.innerHTML = '';
+
+    const rows = Array.isArray(state.adminEmployeeAttendanceStats)
+        ? state.adminEmployeeAttendanceStats
+        : [];
+
+    if (rows.length === 0) {
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="7" class="table-empty-cell">Belum ada data statistik.</td>
+            </tr>
+        `;
+        return;
+    }
+
+    rows.forEach(employee => {
+        const tr = document.createElement('tr');
+
+        const todayStatus = employee.today_status || 'Belum hadir';
+
+        let statusClass = 'neutral';
+
+        if (todayStatus === 'Hadir') {
+            statusClass = 'check-in';
+        } else if (todayStatus === 'Terlambat') {
+            statusClass = 'late';
+        }
+
+        const lastAttendance = employee.last_attendance
+            ? formatDateTimeLabel(employee.last_attendance)
+            : '-';
+
+        tr.innerHTML = `
+            <td>
+                <div class="employee-stat-profile">
+                    <img 
+                        src="${safeImageUrl(employee.photo)}" 
+                        class="activity-avatar" 
+                        alt="Foto ${escapeHtml(employee.name)}"
+                    >
+                    <div class="user-meta">
+                        <h4>${escapeHtml(employee.name)}</h4>
+                        <p>${escapeHtml(employee.role)} • ID: ${escapeHtml(employee.id)}</p>
+                    </div>
+                </div>
+            </td>
+            <td><strong>${Number(employee.present_days || 0)}</strong> hari</td>
+            <td>${Number(employee.total_checkins || 0)}</td>
+            <td>${Number(employee.total_checkouts || 0)}</td>
+            <td>${Number(employee.total_late || 0)}</td>
+            <td>
+                <span class="badge ${statusClass}">
+                    ${escapeHtml(todayStatus)}
+                </span>
+            </td>
+            <td>${escapeHtml(lastAttendance)}</td>
+        `;
+
+        tbody.appendChild(tr);
+    });
+}
+
+function formatDateTimeLabel(value) {
+    if (!value) {
+        return '-';
+    }
+
+    const date = new Date(value);
+
+    if (Number.isNaN(date.getTime())) {
+        return value;
+    }
+
+    return date.toLocaleString('id-ID', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
 }
 
 async function saveSettings() {

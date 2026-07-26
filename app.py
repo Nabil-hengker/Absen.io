@@ -1009,18 +1009,33 @@ def clear_logs():
 def get_stats():
     current_date_prefix = now_local().strftime("%Y-%m-%d") + "%"
     conn = get_db_connection()
+
     total_emp = conn.execute(
         "SELECT COUNT(*) FROM employees WHERE is_deleted = 0"
     ).fetchone()[0]
+
     today_checkins = conn.execute(
-        "SELECT COUNT(*) FROM attendance_logs WHERE type = 'check-in' AND timestamp LIKE ?",
+        """
+        SELECT COUNT(*) 
+        FROM attendance_logs 
+        WHERE type = 'check-in' 
+        AND timestamp LIKE ?
+        """,
         (current_date_prefix,),
     ).fetchone()[0]
+
     today_checkouts = conn.execute(
-        "SELECT COUNT(*) FROM attendance_logs WHERE type = 'check-out' AND timestamp LIKE ?",
+        """
+        SELECT COUNT(*) 
+        FROM attendance_logs 
+        WHERE type = 'check-out' 
+        AND timestamp LIKE ?
+        """,
         (current_date_prefix,),
     ).fetchone()[0]
+
     conn.close()
+
     return jsonify(
         {
             "total_employees": total_emp,
@@ -1029,6 +1044,136 @@ def get_stats():
         }
     )
 
+@app.get("/api/attendance-statistics")
+@admin_required
+def get_attendance_statistics():
+    current_date_prefix = now_local().strftime("%Y-%m-%d") + "%"
+
+    conn = get_db_connection()
+
+    total_emp = conn.execute(
+        """
+        SELECT COUNT(*) 
+        FROM employees 
+        WHERE is_deleted = 0
+        """
+    ).fetchone()[0]
+
+    today_present = conn.execute(
+        """
+        SELECT COUNT(DISTINCT employee_id)
+        FROM attendance_logs
+        WHERE type = 'check-in'
+        AND timestamp LIKE ?
+        """,
+        (current_date_prefix,),
+    ).fetchone()[0]
+
+    today_absent = max(total_emp - today_present, 0)
+
+    summary = conn.execute(
+        """
+        SELECT
+            COUNT(*) AS total_logs,
+            SUM(CASE WHEN type = 'check-in' THEN 1 ELSE 0 END) AS total_checkins,
+            SUM(CASE WHEN type = 'check-out' THEN 1 ELSE 0 END) AS total_checkouts,
+            SUM(CASE WHEN type = 'check-in' AND is_late = 1 THEN 1 ELSE 0 END) AS total_late
+        FROM attendance_logs
+        """
+    ).fetchone()
+
+    rows = conn.execute(
+        """
+        SELECT
+            e.id,
+            e.name,
+            e.role,
+            e.photo,
+
+            COUNT(CASE WHEN l.type = 'check-in' THEN 1 END) AS total_checkins,
+            COUNT(CASE WHEN l.type = 'check-out' THEN 1 END) AS total_checkouts,
+            COUNT(CASE WHEN l.type = 'check-in' AND l.is_late = 1 THEN 1 END) AS total_late,
+
+            COUNT(DISTINCT CASE 
+                WHEN l.type = 'check-in' THEN substr(l.timestamp, 1, 10) 
+            END) AS present_days,
+
+            MAX(l.timestamp) AS last_attendance,
+
+            MAX(CASE 
+                WHEN l.type = 'check-in' AND l.timestamp LIKE ? 
+                THEN l.time_formatted 
+            END) AS today_checkin_time,
+
+            MAX(CASE 
+                WHEN l.type = 'check-out' AND l.timestamp LIKE ? 
+                THEN l.time_formatted 
+            END) AS today_checkout_time,
+
+            MAX(CASE 
+                WHEN l.type = 'check-in' AND l.timestamp LIKE ? 
+                THEN l.is_late 
+                ELSE 0 
+            END) AS today_is_late
+
+        FROM employees e
+        LEFT JOIN attendance_logs l 
+            ON l.employee_id = e.id
+        WHERE e.is_deleted = 0
+        GROUP BY e.id, e.name, e.role, e.photo
+        ORDER BY present_days DESC, total_checkins DESC, e.name COLLATE NOCASE
+        """,
+        (current_date_prefix, current_date_prefix, current_date_prefix),
+    ).fetchall()
+
+    conn.close()
+
+    attendance_rate = round((today_present / total_emp) * 100, 1) if total_emp else 0
+
+    employees = []
+
+    for row in rows:
+        today_checkin_time = row["today_checkin_time"]
+        today_checkout_time = row["today_checkout_time"]
+        today_is_late = row["today_is_late"] or 0
+
+        if today_checkin_time:
+            today_status = "Terlambat" if today_is_late == 1 else "Hadir"
+        else:
+            today_status = "Belum hadir"
+
+        employees.append(
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "role": row["role"],
+                "photo": row["photo"],
+                "total_checkins": row["total_checkins"] or 0,
+                "total_checkouts": row["total_checkouts"] or 0,
+                "total_late": row["total_late"] or 0,
+                "present_days": row["present_days"] or 0,
+                "last_attendance": row["last_attendance"],
+                "today_checkin_time": today_checkin_time,
+                "today_checkout_time": today_checkout_time,
+                "today_status": today_status,
+            }
+        )
+
+    return jsonify(
+        {
+            "summary": {
+                "total_employees": total_emp,
+                "today_present": today_present,
+                "today_absent": today_absent,
+                "attendance_rate": attendance_rate,
+                "total_logs": summary["total_logs"] or 0,
+                "total_checkins": summary["total_checkins"] or 0,
+                "total_checkouts": summary["total_checkouts"] or 0,
+                "total_late": summary["total_late"] or 0,
+            },
+            "employees": employees,
+        }
+    )
 
 @app.get("/api/employees/recycle_bin")
 @admin_required
