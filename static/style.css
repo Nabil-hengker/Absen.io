@@ -2897,5 +2897,5 @@ body.modal-open {
     .admin-statistics-cards {
         grid-template-columns: 1fr;
         padding: 0 16px 18px;
-    }
+    }  
 }
